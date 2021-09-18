@@ -5,8 +5,8 @@
 #include <await/futures/core/future.hpp>
 
 // Fibers
-#include <await/fibers/core/api.hpp>
 #include <await/fibers/sync/future.hpp>
+#include <await/fibers/core/api.hpp>
 
 // Logging
 #include <timber/log.hpp>
@@ -117,7 +117,60 @@ class ReliableChannelOnFutures : public IChannel {
 
 //////////////////////////////////////////////////////////////////////
 
-using ReliableChannel = ReliableChannelOnFutures;
+class ReliableChannelOnFibers : public IChannel {
+ public:
+  ReliableChannelOnFibers(IChannelPtr fair_loss, Backoff::Params backoff_params,
+                          IRuntime* runtime)
+      : fair_loss_(std::move(fair_loss)),
+        backoff_params_(backoff_params),
+        runtime_(runtime),
+        logger_("Reliable", runtime->Log()) {
+  }
+
+  Future<Message> Call(Method method, Message request,
+                       CallOptions options) override {
+    WHEELS_UNUSED(backoff_params_);
+    WHEELS_UNUSED(runtime_);
+
+    LOG_INFO("Call({}, {}) started", method, request);
+
+    auto [f, p] = await::futures::MakeContract<Message>();
+
+    await::fibers::Start(
+        runtime_->Executor(), [fair_loss = fair_loss_, runtime = runtime_,
+                               backoff = Backoff(backoff_params_), method,
+                               request, options, p = std::move(p)]() mutable {
+          auto result = Await(fair_loss->Call(method, request, options));
+
+          while (result.HasError() && IsRetriableError(result.GetErrorCode())) {
+            if (options.stop_advice.StopRequested()) {
+              std::move(p).SetError(Cancelled());
+              break;
+            }
+
+            Await(runtime->Timers()->After(backoff())).ExpectOk();
+            result = Await(fair_loss->Call(method, request, options));
+          }
+
+          if (result.IsOk()) {
+            std::move(p).Set(std::move(result));
+          }
+        });
+
+    return std::move(f);
+  }
+
+ private:
+  IChannelPtr fair_loss_;
+  const Backoff::Params backoff_params_;
+  IRuntime* runtime_;
+  timber::Logger logger_;
+};
+
+//////////////////////////////////////////////////////////////////////
+
+// using ReliableChannel = ReliableChannelOnFutures;
+using ReliableChannel = ReliableChannelOnFibers;
 
 IChannelPtr MakeReliableChannel(IChannelPtr fair_loss,
                                 Backoff::Params backoff_params,
