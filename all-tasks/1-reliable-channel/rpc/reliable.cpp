@@ -24,7 +24,7 @@ namespace rpc {
 
 //////////////////////////////////////////////////////////////////
 
-class ReliableChannelOnFutures : public IChannel {
+class ReliableChannelOnCallbacks : public IChannel {
   struct ParameterPack {
     Method method;
     Message request;
@@ -42,31 +42,44 @@ class ReliableChannelOnFutures : public IChannel {
           p_(std::move(p)) {
     }
 
+    void Start() {
+      Call().Subscribe([self = shared_from_this()](Result<Message>&& result) {
+        self->HandleResult(std::move(result));
+      });
+    }
+
+   private:
+    bool StopRequested() {
+      return pack_.options.stop_advice.StopRequested();
+    }
+
+    bool NeedRetry(const Result<Message>& result) {
+      return result.HasError() && IsRetriableError(result.GetErrorCode());
+    }
+
     void HandleResult(Result<Message>&& result) {
-      if (result.HasError() && IsRetriableError(result.GetErrorCode())) {
-        if (pack_.options.stop_advice.StopRequested()) {
-          std::move(p_).SetError(Cancelled());
-        } else {
-          RetryWithDelay();
-        }
+      if (StopRequested()) {
+        std::move(p_).SetError(Cancelled());
+      } else if (NeedRetry(result)) {
+        Retry();
       } else {
         std::move(p_).Set(std::move(result));
       }
     }
 
-   private:
-    void RetryWithDelay() {
-      runtime_->Timers()
-          ->After(backoff_())
-          .Via(runtime_->Executor())
-          .Subscribe([this, self = shared_from_this()](Result<void>&&) {
-            fair_loss_->Call(pack_.method, pack_.request, pack_.options)
-                .Via(runtime_->Executor())
-                .Subscribe([this, seflf = shared_from_this()](
-                               Result<Message>&& result) {
-                  HandleResult(std::move(result));
-                });
-          });
+    void Retry() {
+      AfterDelay().Subscribe([self = shared_from_this()](Result<void>&&) {
+        self->Start();
+      });
+    }
+
+    Future<Message> Call() {
+      return fair_loss_->Call(pack_.method, pack_.request, pack_.options)
+          .Via(runtime_->Executor());
+    }
+
+    Future<void> AfterDelay() {
+      return runtime_->Timers()->After(backoff_()).Via(runtime_->Executor());
     }
 
    private:
@@ -78,8 +91,8 @@ class ReliableChannelOnFutures : public IChannel {
   };
 
  public:
-  ReliableChannelOnFutures(IChannelPtr fair_loss,
-                           Backoff::Params backoff_params, IRuntime* runtime)
+  ReliableChannelOnCallbacks(IChannelPtr fair_loss,
+                             Backoff::Params backoff_params, IRuntime* runtime)
       : fair_loss_(std::move(fair_loss)),
         backoff_params_(backoff_params),
         runtime_(runtime),
@@ -96,15 +109,9 @@ class ReliableChannelOnFutures : public IChannel {
     auto [f, p] = await::futures::MakeContract<Message>();
 
     ParameterPack pack = {method, request, options};
-    auto retrier = std::make_shared<Retrier>(fair_loss_, backoff_params_,
-                                             runtime_, pack, std::move(p));
-
-    fair_loss_->Call(method, request, options)
-        .Via(runtime_->Executor())
-        .Subscribe([retrier](Result<Message>&& result) {
-          retrier->HandleResult(std::move(result));
-        });
-
+    std::make_shared<Retrier>(fair_loss_, backoff_params_, runtime_, pack,
+                              std::move(p))
+        ->Start();
     return std::move(f);
   }
 
@@ -118,6 +125,67 @@ class ReliableChannelOnFutures : public IChannel {
 //////////////////////////////////////////////////////////////////////
 
 class ReliableChannelOnFibers : public IChannel {
+  struct ParameterPack {
+    Method method;
+    Message request;
+    CallOptions options;
+  };
+
+  class Retrier : public std::enable_shared_from_this<Retrier> {
+   public:
+    Retrier(IChannelPtr fair_loss, const Backoff::Params backoff_params,
+            IRuntime* runtime, ParameterPack pack, Promise<Message>&& p)
+        : fair_loss_(fair_loss),
+          backoff_(backoff_params),
+          runtime_(runtime),
+          pack_(pack),
+          p_(std::move(p)) {
+    }
+
+    void Start() {
+      auto result = Await(Call());
+      while (NeedRetry(result)) {
+        Await(AfterDelay()).ExpectOk();
+        result = Await(Call());
+      }
+      HandleResult(std::move(result));
+    }
+
+   private:
+    bool StopRequested() {
+      return pack_.options.stop_advice.StopRequested();
+    }
+
+    bool NeedRetry(const Result<Message>& result) {
+      return result.HasError() && IsRetriableError(result.GetErrorCode()) &&
+             !StopRequested();
+    }
+
+    void HandleResult(Result<Message>&& result) {
+      if (StopRequested()) {
+        std::move(p_).SetError(Cancelled());
+      } else {
+        std::move(p_).Set(std::move(result));
+      }
+    }
+
+    Future<Message> Call() {
+      return fair_loss_->Call(pack_.method, pack_.request, pack_.options)
+          .Via(runtime_->Executor());
+    }
+
+    Future<void> AfterDelay() {
+      return runtime_->Timers()->After(backoff_()).Via(runtime_->Executor());
+    }
+
+   private:
+    IChannelPtr fair_loss_;
+    Backoff backoff_;
+    IRuntime* runtime_;
+    ParameterPack pack_;
+    Promise<Message> p_;
+  };
+
  public:
   ReliableChannelOnFibers(IChannelPtr fair_loss, Backoff::Params backoff_params,
                           IRuntime* runtime)
@@ -136,27 +204,13 @@ class ReliableChannelOnFibers : public IChannel {
 
     auto [f, p] = await::futures::MakeContract<Message>();
 
+    ParameterPack pack = {method, request, options};
     await::fibers::Start(
-        runtime_->Executor(), [fair_loss = fair_loss_, runtime = runtime_,
-                               backoff = Backoff(backoff_params_), method,
-                               request, options, p = std::move(p)]() mutable {
-          auto result = Await(fair_loss->Call(method, request, options));
-
-          while (result.HasError() && IsRetriableError(result.GetErrorCode())) {
-            if (options.stop_advice.StopRequested()) {
-              std::move(p).SetError(Cancelled());
-              break;
-            }
-
-            Await(runtime->Timers()->After(backoff())).ExpectOk();
-            result = Await(fair_loss->Call(method, request, options));
-          }
-
-          if (result.IsOk()) {
-            std::move(p).Set(std::move(result));
-          }
+        runtime_->Executor(),
+        [retrier = Retrier(fair_loss_, backoff_params_, runtime_, pack,
+                           std::move(p))]() mutable {
+          retrier.Start();
         });
-
     return std::move(f);
   }
 
@@ -169,7 +223,7 @@ class ReliableChannelOnFibers : public IChannel {
 
 //////////////////////////////////////////////////////////////////////
 
-// using ReliableChannel = ReliableChannelOnFutures;
+// using ReliableChannel = ReliableChannelOnCallbacks;
 using ReliableChannel = ReliableChannelOnFibers;
 
 IChannelPtr MakeReliableChannel(IChannelPtr fair_loss,
