@@ -1,4 +1,4 @@
-#include <node/roles/replica.hpp>
+#include "replica.hpp"
 
 Replica::Replica()
     : kv_store_(node::rt::Database(), "data"),

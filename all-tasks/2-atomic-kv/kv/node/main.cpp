@@ -4,7 +4,7 @@
 
 #include <whirl/node/rpc/server.hpp>
 
-#include <node/roles/coordinator.hpp>
+#include "roles/coordinator.hpp"
 
 //////////////////////////////////////////////////////////////////////
 

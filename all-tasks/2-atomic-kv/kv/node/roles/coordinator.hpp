@@ -6,8 +6,8 @@
 
 #include <await/futures/combine/quorum.hpp>
 
-#include <node/roles/replica.hpp>
-#include <node/timestamps/stamped_value.hpp>
+#include "replica.hpp"
+#include "../timestamps/stamped_value.hpp"
 
 #include <await/fibers/sync/mutex.hpp>
 

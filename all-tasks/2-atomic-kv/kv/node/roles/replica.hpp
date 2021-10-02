@@ -7,7 +7,7 @@
 
 #include <timber/log.hpp>
 
-#include <node/timestamps/stamped_value.hpp>
+#include "../timestamps/stamped_value.hpp"
 
 #include <await/fibers/sync/mutex.hpp>
 

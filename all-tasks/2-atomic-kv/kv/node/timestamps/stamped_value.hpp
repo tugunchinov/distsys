@@ -1,8 +1,9 @@
 #pragma once
 
-#include <node/timestamps/write_timestamp.hpp>
+#include <muesli/serializable.hpp>
+#include <cereal/types/string.hpp>
 
-// Replicas store versioned (stamped) values
+#include "write_timestamp.hpp"
 
 using Value = std::string;
 

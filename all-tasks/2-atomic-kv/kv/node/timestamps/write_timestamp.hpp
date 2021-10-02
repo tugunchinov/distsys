@@ -3,6 +3,7 @@
 #include <iostream>
 
 #include <muesli/serializable.hpp>
+#include <cereal/types/string.hpp>
 
 struct WriteTimestamp {
   uint64_t value;
