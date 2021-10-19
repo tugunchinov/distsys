@@ -6,8 +6,8 @@
 
 #include <await/futures/combine/quorum.hpp>
 
-#include "replica.hpp"
-#include "../timestamps/stamped_value.hpp"
+#include <kv/node/roles/replica.hpp>
+#include <kv/node/timestamps/stamped_value.hpp>
 
 #include <await/fibers/sync/mutex.hpp>
 
@@ -24,17 +24,19 @@ class Coordinator : public commute::rpc::ServiceBase<Coordinator>,
   Value Get(Key key);
 
  private:
-  WriteTimestamp ChooseWriteTimestamp(Key /*key*/);
+  WriteTimestamp ChooseWriteTimestamp(Key key);
+
+  int64_t GetMyId() const;
+  uint64_t GetLocalMonotonicNow() const;
+  uint64_t GetNextTimestamp(Key key) const;
 
   StampedValue FindMostRecent(const std::vector<StampedValue>& values) const;
 
   void SetStamped(Key key, StampedValue sv);
-  StampedValue GetStamped(Key key);
+  StampedValue GetStamped(Key key) const;
 
   size_t Majority() const;
 
  private:
   timber::Logger logger_;
-  std::atomic<uint64_t> time_{0};
-  await::fibers::Mutex m_;
 };

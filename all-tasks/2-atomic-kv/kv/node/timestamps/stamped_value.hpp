@@ -3,7 +3,7 @@
 #include <muesli/serializable.hpp>
 #include <cereal/types/string.hpp>
 
-#include "write_timestamp.hpp"
+#include <kv/node/timestamps/write_timestamp.hpp>
 
 using Value = std::string;
 

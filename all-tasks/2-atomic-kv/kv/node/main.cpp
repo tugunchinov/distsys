@@ -1,10 +1,9 @@
 #include <kv/node/main.hpp>
+#include <kv/node/roles/coordinator.hpp>
 
 #include <await/futures/util/never.hpp>
 
 #include <whirl/node/rpc/server.hpp>
-
-#include "roles/coordinator.hpp"
 
 //////////////////////////////////////////////////////////////////////
 
@@ -17,7 +16,6 @@ void KVNodeMain() {
   node::rt::Database()->Open(db_path);
 
   // Start RPC server
-
   auto rpc_port = node::rt::Config()->GetInt<uint16_t>("rpc.port");
   auto rpc_server = node::rpc::MakeServer(rpc_port);
 

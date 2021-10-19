@@ -1,4 +1,4 @@
-#include "coordinator.hpp"
+#include <kv/node/roles/coordinator.hpp>
 
 using await::fibers::Await;
 using await::futures::Future;
@@ -14,26 +14,18 @@ void Coordinator::RegisterMethods() {
 }
 
 void Coordinator::Set(Key key, Value value) {
-  std::lock_guard lock(m_);
   WriteTimestamp write_ts = ChooseWriteTimestamp(key);
   SetStamped(key, {value, write_ts});
 }
 
 Value Coordinator::Get(Key key) {
-  std::lock_guard lock(m_);
   auto most_recent = GetStamped(key);
   SetStamped(key, most_recent);
   return most_recent.value;
 }
 
-WriteTimestamp Coordinator::ChooseWriteTimestamp(Key /*key*/) {
-  // return GetStamped(key).timestamp + 1;
-  // return {whirl::node::rt::WallTimeNow().ToJiffies().Count()};
-  auto tt_now = node::rt::TrueTime()->Now();
-  return {tt_now.earliest.ToJiffies().Count() +
-          (tt_now.latest.ToJiffies().Count() -
-           tt_now.earliest.ToJiffies().Count()) /
-              2};
+WriteTimestamp Coordinator::ChooseWriteTimestamp(Key key) {
+  return {GetNextTimestamp(key), GetMyId(), GetLocalMonotonicNow()};
 }
 
 StampedValue Coordinator::FindMostRecent(
@@ -51,7 +43,7 @@ void Coordinator::SetStamped(Key key, StampedValue sv) {
   std::vector<Future<void>> writes;
   for (const auto& peer : ListPeers().WithMe()) {
     writes.push_back(commute::rpc::Call("Replica.LocalWrite")
-                         .Args<Key, StampedValue>(key, {sv.value, sv.timestamp})
+                         .Args<Key, StampedValue>(key, sv)
                          .Via(Channel(peer))
                          .Context(await::context::ThisFiber())
                          .AtLeastOnce());
@@ -59,7 +51,7 @@ void Coordinator::SetStamped(Key key, StampedValue sv) {
   Await(Quorum(std::move(writes), /*threshold=*/Majority())).ThrowIfError();
 }
 
-StampedValue Coordinator::GetStamped(Key key) {
+StampedValue Coordinator::GetStamped(Key key) const {
   std::vector<Future<StampedValue>> reads;
   for (const auto& peer : ListPeers().WithMe()) {
     reads.push_back(commute::rpc::Call("Replica.LocalRead")
@@ -70,10 +62,21 @@ StampedValue Coordinator::GetStamped(Key key) {
   }
   auto stamped_values =
       Await(Quorum(std::move(reads), /*threshold=*/Majority())).ValueOrThrow();
-  auto most_recent = FindMostRecent(stamped_values);
-  return most_recent;
+  return FindMostRecent(stamped_values);
 }
 
 size_t Coordinator::Majority() const {
   return NodeCount() / 2 + 1;
+}
+
+int64_t Coordinator::GetMyId() const {
+  return node::rt::Config()->GetInt64("node.id");
+}
+
+uint64_t Coordinator::GetLocalMonotonicNow() const {
+  return whirl::node::rt::TimeService()->MonotonicNow().ToJiffies().Count();
+}
+
+uint64_t Coordinator::GetNextTimestamp(Key key) const {
+  return GetStamped(key).timestamp.value + 1;
 }

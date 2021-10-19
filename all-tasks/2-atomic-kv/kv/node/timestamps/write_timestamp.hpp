@@ -4,28 +4,26 @@
 
 #include <muesli/serializable.hpp>
 #include <cereal/types/string.hpp>
+#include <whirl/node/time/wall_time.hpp>
 
 struct WriteTimestamp {
-  uint64_t value;
+  uint64_t value{0};
+  int64_t id{0};
+  uint64_t local_time{0};
 
   static WriteTimestamp Min() {
-    return {0};
+    return {};
   }
 
   bool operator<(const WriteTimestamp& that) const {
-    return value < that.value;
+    return std::tie(value, id, local_time) <
+           std::tie(that.value, that.id, that.local_time);
   }
 
-  WriteTimestamp operator+(uint64_t other) {
-    WriteTimestamp ts = *this;
-    ts.value += other;
-    return ts;
-  }
-
-  MUESLI_SERIALIZABLE(value)
+  MUESLI_SERIALIZABLE(value, id, local_time)
 };
 
 inline std::ostream& operator<<(std::ostream& out, const WriteTimestamp& ts) {
-  out << ts.value;
+  out << ts.value << ":" << ts.id << ":" << ts.local_time;
   return out;
 }

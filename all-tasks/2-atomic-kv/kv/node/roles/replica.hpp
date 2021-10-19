@@ -7,7 +7,7 @@
 
 #include <timber/log.hpp>
 
-#include "../timestamps/stamped_value.hpp"
+#include <kv/node/timestamps/stamped_value.hpp>
 
 #include <await/fibers/sync/mutex.hpp>
 
@@ -31,5 +31,7 @@ class Replica : public commute::rpc::ServiceBase<Replica> {
  private:
   node::store::KVStore<StampedValue> kv_store_;
   timber::Logger logger_;
+
+  // TODO: remove
   await::fibers::Mutex m_;
 };

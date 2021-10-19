@@ -1,4 +1,4 @@
-#include "replica.hpp"
+#include <kv/node/roles/replica.hpp>
 
 Replica::Replica()
     : kv_store_(node::rt::Database(), "data"),
@@ -12,18 +12,13 @@ void Replica::RegisterMethods() {
 
 void Replica::LocalWrite(Key key, StampedValue target_value) {
   std::lock_guard lock(m_);
-  std::optional<StampedValue> local_value = kv_store_.TryGet(key);
-  if (!local_value.has_value()) {
+  auto local_value = LocalRead(key);
+  if (local_value.timestamp < target_value.timestamp) {
     Update(key, target_value);
-  } else {
-    if (local_value->timestamp < target_value.timestamp) {
-      Update(key, target_value);
-    }
   }
 }
 
 StampedValue Replica::LocalRead(Key key) {
-  std::lock_guard lock(m_);
   auto val = kv_store_.GetOr(key, {"", WriteTimestamp::Min()});
   LOG_INFO("Read '{}' -> {}", key, val);
   return val;
