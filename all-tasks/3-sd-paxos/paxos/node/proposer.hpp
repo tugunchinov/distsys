@@ -1,20 +1,22 @@
 #pragma once
 
+#include <commute/rpc/service_base.hpp>
+
+#include <paxos/node/backoff.hpp>
 #include <paxos/node/proposal.hpp>
 #include <paxos/node/proto.hpp>
-#include <whirl/node/runtime/shortcuts.hpp>
-
-#include <commute/rpc/service_base.hpp>
 
 #include <timber/logger.hpp>
 
+// TODO:
+
 #include <whirl/node/cluster/peer.hpp>
 
-#include <await/fibers/sync/mutex.hpp>
-
-#include <paxos/node/backoff.hpp>
+#include <whirl/node/runtime/shortcuts.hpp>
 
 #include <whirl/node/store/kv.hpp>
+
+#include <await/fibers/sync/mutex.hpp>
 
 using namespace whirl;
 
@@ -24,23 +26,24 @@ namespace paxos {
 
 class ProposerImpl : public node::cluster::Peer {
  public:
-  ProposerImpl();
+  explicit ProposerImpl(const Value& input);
 
  public:
-  Value Propose(const Value& input);
+  Value Propose();
 
  private:
   int64_t GetMyID() const;
-  uint64_t GetLocalMonotonicNow() const;
-  ProposalNumber ChooseN() const;
+  uint64_t GetLocalMonotonicNow();
+  ProposalNumber ChooseN();
 
   Backoff GetBackoff() const;
 
-  void Start();
-  void Retry();
-
   void Prepare();
   void Accept();
+
+  void Wait();
+
+  void UpdateN(const ProposalNumber& advice);
 
   template <typename Phase>
   auto CallAcceptor(const typename Phase::Request& request);
@@ -51,27 +54,43 @@ class ProposerImpl : public node::cluster::Peer {
   uint64_t Majority() const;
 
  private:
-  timber::Logger logger_;
+  mutable timber::Logger logger_;
 
   Backoff backoff_;
+
   Proposal proposal_;
 
-  Value input_;
+  const Value& input_;
 
-  bool chosen_ = false;
-
-  mutable std::atomic<uint64_t> now_;
+  bool promised_{false};
+  bool accepted_{false};
 };
 
 class Proposer : public commute::rpc::ServiceBase<Proposer> {
+ public:
+  Proposer() : local_monotonic_(whirl::node::rt::Database(), "n") {
+  }
+
  protected:
   Value Propose(const Value& input) {
-    return ProposerImpl().Propose(input);
+    return ProposerImpl(input).Propose();
+  }
+
+  uint64_t GetLocalMonotonicNow() {
+    std::lock_guard lock(m_);
+    uint64_t latest = local_monotonic_.GetOr("n", 0);
+    local_monotonic_.Put("n", latest + 1);
+    return latest;
   }
 
   void RegisterMethods() override {
     COMMUTE_RPC_REGISTER_METHOD(Propose);
+    COMMUTE_RPC_REGISTER_METHOD(GetLocalMonotonicNow);
   }
+
+ private:
+  whirl::node::store::KVStore<uint64_t> local_monotonic_;
+  await::fibers::Mutex m_;
 };
 
 }  // namespace paxos

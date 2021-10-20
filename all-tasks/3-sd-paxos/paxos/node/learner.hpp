@@ -1,7 +1,7 @@
 #pragma once
 
 #include <commute/rpc/service_base.hpp>
-#include <commute/rpc/call.hpp>
+#include <whirl/node/store/kv.hpp>
 
 namespace paxos {
 
@@ -12,10 +12,10 @@ class Learner : public commute::rpc::ServiceBase<Learner> {
 
  protected:
   void RegisterMethods() override {
-    // COMMUTE_RPC_REGISTER_METHOD(Propose);
   }
 
  private:
+  // whirl::node::store::KVStore<Proposal> ;
 };
 
 }  // namespace paxos

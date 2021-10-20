@@ -1,13 +1,9 @@
-#include <whirl/node/runtime/shortcuts.hpp>
-#include <whirl/node/cluster/peer.hpp>
-
-#include <paxos/node/quorum.hpp>
-#include <paxos/node/backoff.hpp>
-
 #include <commute/rpc/call.hpp>
 
+#include <paxos/node/quorum.hpp>
+#include <paxos/node/proposer.hpp>
+
 #include <timber/log.hpp>
-#include "proposer.hpp"
 
 using namespace whirl;
 
@@ -17,37 +13,25 @@ using namespace proto;
 using namespace await::futures;
 using namespace await::fibers;
 
-ProposerImpl::ProposerImpl()
+ProposerImpl::ProposerImpl(const Value& input)
     : Peer(node::rt::Config()),
       logger_("Paxos.Proposer", node::rt::LoggerBackend()),
-      backoff_(GetBackoff()) {
-  LOG_INFO("Born");
-  now_ = commute::rpc::GenerateRequestId();
+      backoff_(GetBackoff()),
+      proposal_({ChooseN(), input}),
+      input_(input) {
 }
 
-Value ProposerImpl::Propose(const Value& input) {
-  proposal_ = {ChooseN(), input};
-  input_ = input;
-  Start();
-  chosen_ = false;
-  return proposal_.value;
-}
-
-void ProposerImpl::Start() {
-  if (chosen_) {
-    return;
-  }
+Value ProposerImpl::Propose() {
   Prepare();
-  if (chosen_) {
-    return;
+  if (promised_) {
+    Accept();
+    if (accepted_) {
+      return proposal_.value;
+    }
   }
-  Accept();
-}
-
-void ProposerImpl::Retry() {
-  Await(node::rt::TimeService()->After(backoff_())).ExpectOk();
-  proposal_.value = input_;
-  Start();
+  accepted_ = promised_ = false;
+  Wait();
+  return Propose();
 }
 
 template <typename Phase>
@@ -73,18 +57,16 @@ auto ProposerImpl::CallAcceptor(const typename Phase::Request& request) {
 }
 
 void ProposerImpl::Prepare() {
-  LOG_INFO("Choose n = {}", proposal_.n);
+  LOG_INFO("Chose n = {}", proposal_.n);
   proto::Prepare::Request request{proposal_.n};
   auto verdict = CallAcceptor<proto::Prepare>(request);
   if (verdict.HasError() || !verdict->accepted) {
     if (verdict.HasValue()) {
-      proposal_.n = verdict->advice + 1;
-      proposal_.n.id = GetMyID();
-      proposal_.n.local_time = GetLocalMonotonicNow();
+      UpdateN(verdict->advice);
     }
-    Retry();
   } else {
     proposal_.value = ChooseValue(verdict->votes);
+    promised_ = true;
   }
 }
 
@@ -93,13 +75,10 @@ void ProposerImpl::Accept() {
   auto verdict = CallAcceptor<proto::Accept>(request);
   if (verdict.HasError() || !verdict->accepted) {
     if (verdict.HasValue()) {
-      proposal_.n = verdict->advice + 1;
-      proposal_.n.id = GetMyID();
-      proposal_.n.local_time = GetLocalMonotonicNow();
+      UpdateN(verdict->advice);
     }
-    Retry();
   } else {
-    chosen_ = true;
+    accepted_ = true;
   }
 }
 
@@ -107,7 +86,7 @@ uint64_t ProposerImpl::Majority() const {
   return NodeCount() / 2 + 1;
 }
 
-ProposalNumber ProposerImpl::ChooseN() const {
+ProposalNumber ProposerImpl::ChooseN() {
   return {0, GetMyID(), GetLocalMonotonicNow()};
 }
 
@@ -115,9 +94,15 @@ int64_t ProposerImpl::GetMyID() const {
   return node::rt::Config()->GetInt64("node.id");
 }
 
-uint64_t ProposerImpl::GetLocalMonotonicNow() const {
+uint64_t ProposerImpl::GetLocalMonotonicNow() {
+  // Doesn't work
   // return node::rt::TimeService()->MonotonicNow().ToJiffies().Count();
-  return now_.fetch_add(1);
+  return Await(commute::rpc::Call("Proposer.GetLocalMonotonicNow")
+                   .Args()
+                   .Via(Channel(node::rt::HostName()))
+                   .Start()
+                   .As<uint64_t>())
+      .ValueOrThrow();
 }
 Backoff ProposerImpl::GetBackoff() const {
   uint64_t init = node::rt::Config()->GetInt<uint64_t>("paxos.backoff.init");
@@ -136,11 +121,18 @@ Value ProposerImpl::ChooseValue(
                                       })
                          ->vote;
 
-  if (!latest_vote) {
-    return input_;
-  }
+  return !latest_vote || latest_vote->value.empty() ? input_
+                                                    : latest_vote->value;
+}
 
-  return latest_vote->value.empty() ? input_ : latest_vote->value;
+void ProposerImpl::Wait() {
+  Await(node::rt::TimeService()->After(backoff_())).ExpectOk();
+}
+
+void ProposerImpl::UpdateN(const ProposalNumber& advice) {
+  proposal_.n = advice + 1;
+  proposal_.n.id = GetMyID();
+  proposal_.n.local_time = GetLocalMonotonicNow();
 }
 
 }  // namespace paxos

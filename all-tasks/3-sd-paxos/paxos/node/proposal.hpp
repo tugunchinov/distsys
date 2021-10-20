@@ -27,7 +27,7 @@ struct ProposalNumber {
     return {};
   }
 
-  ProposalNumber operator+(uint64_t value) {
+  ProposalNumber operator+(uint64_t value) const {
     return {k + value, id, local_time};
   }
 

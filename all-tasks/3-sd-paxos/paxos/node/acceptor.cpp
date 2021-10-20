@@ -4,57 +4,75 @@
 
 #include <timber/log.hpp>
 
+// TODO: extract learner
+
 using namespace whirl;
 
 namespace paxos {
 
+using namespace proto;
+
 Acceptor::Acceptor()
     : logger_("Paxos.Acceptor", node::rt::LoggerBackend()),
-      kv_store_(node::rt::Database(), "data") {
+      np_(node::rt::Database(), "vote"),
+      vote_(node::rt::Database(), "np") {
 }
 
-void Acceptor::Prepare(const proto::Prepare::Request& request,
-                       proto::Prepare::Response* response) {
+void Acceptor::Prepare(const Prepare::Request& request,
+                       Prepare::Response* response) {
   std::lock_guard lock(m_);
-  if (request.n < kv_store_.GetOr("np", {}).n) {
+  if (request.n < GetNp()) {
     Reject<proto::Prepare>(response);
-    LOG_INFO("nP{}", request.n);
+    LOG_INFO("nack P{}", request.n);
   } else {
-    LOG_INFO("P{}", request.n);
-    kv_store_.Put("np", {request.n});
-    np_ = request.n;
+    LOG_INFO("ack P{}", request.n);
+    UpdateNp(request.n);
     Promise(response);
   }
 }
 
-void Acceptor::Accept(const proto::Accept::Request& request,
-                      proto::Accept::Response* response) {
+void Acceptor::Accept(const Accept::Request& request,
+                      Accept::Response* response) {
   std::lock_guard lock(m_);
-  if (request.proposal.n < kv_store_.GetOr("np", {}).n) {
+  if (request.proposal.n < GetNp()) {
     Reject<proto::Accept>(response);
-    LOG_INFO("nA{}", request.proposal);
+    LOG_INFO("nack A{}", request.proposal);
   } else {
-    LOG_INFO("A{}", request.proposal);
-    kv_store_.Put("np", {request.proposal.n});
-    np_ = request.proposal.n;
-    kv_store_.Put("vote", request.proposal);
-    vote_ = request.proposal;
+    LOG_INFO("ack A{}", request.proposal);
+    UpdateNp(request.proposal.n);
+    UpdateVote(request.proposal);
     Vote(response);
   }
+}
+
+ProposalNumber Acceptor::GetNp() const {
+  return np_.GetOr("np", {});
+}
+
+void Acceptor::UpdateNp(const ProposalNumber& n) {
+  np_.Put("np", n);
+}
+
+Proposal Acceptor::GetVote() const {
+  return vote_.GetOr("vote", {});
+}
+
+void Acceptor::UpdateVote(const Proposal& vote) {
+  vote_.Put("vote", vote);
 }
 
 template <typename Phase>
 void Acceptor::Reject(typename Phase::Response* response) {
   response->ack = false;
-  response->advice = kv_store_.GetOr("np", {}).n;
+  response->advice = GetNp();
 }
 
-void Acceptor::Promise(proto::Prepare::Response* response) {
+void Acceptor::Promise(Prepare::Response* response) {
   response->ack = true;
-  response->vote = kv_store_.GetOr("vote", {});
+  response->vote = GetVote();
 }
 
-void Acceptor::Vote(proto::Accept::Response* response) {
+void Acceptor::Vote(Accept::Response* response) {
   response->ack = true;
 }
 

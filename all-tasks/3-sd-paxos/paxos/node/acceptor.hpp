@@ -1,19 +1,17 @@
 #pragma once
 
-#include <paxos/node/proposal.hpp>
-#include <paxos/node/proto.hpp>
+#include <await/fibers/sync/mutex.hpp>
 
 #include <commute/rpc/service_base.hpp>
 
-#include <timber/logger.hpp>
+#include <paxos/node/proposal.hpp>
+#include <paxos/node/proto.hpp>
 
-#include <await/fibers/sync/mutex.hpp>
+#include <timber/logger.hpp>
 
 #include <whirl/node/store/kv.hpp>
 
 namespace paxos {
-
-// Acceptor role / RPC service
 
 class Acceptor : public commute::rpc::ServiceBase<Acceptor> {
  public:
@@ -25,17 +23,19 @@ class Acceptor : public commute::rpc::ServiceBase<Acceptor> {
     COMMUTE_RPC_REGISTER_HANDLER(Accept);
   }
 
-  // Phase 1 (Prepare / Promise)
-
   void Prepare(const proto::Prepare::Request& request,
                proto::Prepare::Response* response);
-
-  // Phase 2 (Accept / Accepted)
 
   void Accept(const proto::Accept::Request& request,
               proto::Accept::Response* response);
 
  private:
+  ProposalNumber GetNp() const;
+  void UpdateNp(const ProposalNumber& n);
+
+  Proposal GetVote() const;
+  void UpdateVote(const Proposal& vote);
+
   template <typename Phase>
   void Reject(typename Phase::Response* response);
 
@@ -45,12 +45,8 @@ class Acceptor : public commute::rpc::ServiceBase<Acceptor> {
 
  private:
   timber::Logger logger_;
-
-  whirl::node::store::KVStore<Proposal> kv_store_;
-
-  paxos::ProposalNumber np_{};
-  paxos::Proposal vote_{};
-
+  whirl::node::store::KVStore<ProposalNumber> np_;
+  whirl::node::store::KVStore<Proposal> vote_;
   await::fibers::Mutex m_;
 };
 

@@ -1,29 +1,18 @@
 #pragma once
 
-#include <paxos/node/proposal.hpp>
-
-#include <await/futures/combine/quorum.hpp>
-
-#include <commute/rpc/call.hpp>
-
-#include <paxos/node/proto.hpp>
-
 #include <await/futures/core/promise.hpp>
 #include <await/futures/combine/detail/combine.hpp>
-#include <await/futures/combine/detail/traits.hpp>
 #include <await/futures/helpers.hpp>
 
 #include <await/support/thread_spinlock.hpp>
 
-#include <twist/stdlike/atomic.hpp>
+#include <paxos/node/proposal.hpp>
+#include <paxos/node/proto.hpp>
 
 #include <optional>
 #include <vector>
 
 namespace paxos {
-
-using namespace await::futures;
-using namespace wheels::make_result;
 
 template <typename Phase>
 struct Verdict {
@@ -48,7 +37,7 @@ class PaxosQuorumCombinator {
 
   void ProcessInput(wheels::Result<typename Phase::Response> result,
                     size_t /*index*/) {
-    std::unique_lock lock(mutex_);
+    std::lock_guard lock(mutex_);
 
     if (completed_) {
       return;
@@ -58,36 +47,29 @@ class PaxosQuorumCombinator {
       if (result->ack) {
         ++oks_;
         values_.push_back(std::move(*result));
-        if (oks_ == threshold_) {
-          completed_ = true;
-          lock.unlock();
-          std::move(*promise_).Set(Ok(Verdict<Phase>{std::move(values_)}));
-        }
       } else {
         ++nacks_;
         best_advice_ = std::max(best_advice_, result->advice);
-        if (ImpossibleToReachThreshold()) {
-          completed_ = true;
-          lock.unlock();
-          std::move(*promise_).Set(Ok(Verdict<Phase>{best_advice_}));
-        }
       }
     } else {
       ++errors_;
-      if (ImpossibleToReachThreshold()) {
-        completed_ = true;
-        if (nacks_ > 0) {
-          std::move(*promise_).Set(Ok(Verdict<Phase>{best_advice_}));
-        } else {
-          lock.unlock();
-          std::move(*promise_).SetError(result.GetError());
-        }
+    }
+
+    if (oks_ == threshold_) {
+      completed_ = true;
+      std::move(*promise_).Set(MakeVotes());
+    } else if (ImpossibleToReachThreshold()) {
+      completed_ = true;
+      if (nacks_ > 0) {
+        std::move(*promise_).Set(MakeAdvice());
+      } else {
+        std::move(*promise_).SetError(result.GetError());
       }
     }
   }
 
-  Future<Verdict<Phase>> MakeFuture() {
-    auto [f, p] = MakeContract<Verdict<Phase>>();
+  await::futures::Future<Verdict<Phase>> MakeFuture() {
+    auto [f, p] = await::futures::MakeContract<Verdict<Phase>>();
     promise_.emplace(std::move(p));
     return std::move(f);
   }
@@ -95,6 +77,14 @@ class PaxosQuorumCombinator {
  private:
   bool ImpossibleToReachThreshold() const {
     return errors_ + nacks_ + threshold_ > num_inputs_;
+  }
+
+  auto MakeAdvice() const {
+    return wheels::make_result::Ok(Verdict<Phase>{best_advice_});
+  }
+
+  auto MakeVotes() {
+    return wheels::make_result::Ok(Verdict<Phase>{std::move(values_)});
   }
 
  private:
@@ -107,23 +97,24 @@ class PaxosQuorumCombinator {
   size_t nacks_{0};
   std::vector<typename Phase::Response> values_;
   ProposalNumber best_advice_;
-  std::optional<Promise<Verdict<Phase>>> promise_;
+  std::optional<await::futures::Promise<Verdict<Phase>>> promise_;
   bool completed_{false};
 };
 
 template <typename Phase>
-auto PaxosQuorum(std::vector<Future<typename Phase::Response>> inputs,
-                 size_t threshold) {
+auto PaxosQuorum(
+    std::vector<await::futures::Future<typename Phase::Response>> inputs,
+    size_t threshold) {
   if (threshold == 0) {
-    return MakeValue(Verdict<Phase>{});
+    return await::futures::MakeValue(Verdict<Phase>{});
   }
   if (inputs.size() < threshold) {
     WHEELS_PANIC(
         "Number of inputs < required threshold, output future never completes");
   }
 
-  return detail::Combine<PaxosQuorumCombinator<Phase>>(std::move(inputs),
-                                                       threshold);
+  return await::futures::detail::Combine<PaxosQuorumCombinator<Phase>>(
+      std::move(inputs), threshold);
 }
 
 }  // namespace paxos

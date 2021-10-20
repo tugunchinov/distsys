@@ -15,20 +15,13 @@ struct Backoff {
   };
 
  public:
-  explicit Backoff(Params params) : params_(params), next_(params.init) {
-  }
+  explicit Backoff(Params params);
 
   // Returns backoff delay
-  Millis operator()() {
-    auto curr = next_;
-    next_ = ComputeNext(curr);
-    return curr;
-  }
+  Millis operator()();
 
  private:
-  Millis ComputeNext(Millis curr) {
-    return std::min(params_.max, curr * params_.factor);
-  }
+  Millis ComputeNext(Millis curr);
 
  private:
   const Params params_;
