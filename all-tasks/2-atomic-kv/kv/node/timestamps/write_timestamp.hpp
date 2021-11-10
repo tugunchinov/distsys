@@ -7,23 +7,21 @@
 #include <whirl/node/time/wall_time.hpp>
 
 struct WriteTimestamp {
-  uint64_t value{0};
-  int64_t id{0};
-  uint64_t local_time{0};
+  uint64_t time{0};
+  std::string guid{};
 
   static WriteTimestamp Min() {
     return {};
   }
 
   bool operator<(const WriteTimestamp& that) const {
-    return std::tie(value, id, local_time) <
-           std::tie(that.value, that.id, that.local_time);
+    return std::tie(time, guid) < std::tie(that.time, that.guid);
   }
 
-  MUESLI_SERIALIZABLE(value, id, local_time)
+  MUESLI_SERIALIZABLE(time, guid)
 };
 
 inline std::ostream& operator<<(std::ostream& out, const WriteTimestamp& ts) {
-  out << ts.value << ":" << ts.id << ":" << ts.local_time;
+  out << ts.time << " (" << ts.guid << ")";
   return out;
 }

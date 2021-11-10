@@ -1,15 +1,19 @@
 #pragma once
 
-#include <whirl/node/runtime/shortcuts.hpp>
-#include <whirl/node/store/kv.hpp>
-
 #include <commute/rpc/service_base.hpp>
 
-#include <timber/log.hpp>
+#include <cereal/types/string.hpp>
 
 #include <kv/node/timestamps/stamped_value.hpp>
 
-#include <await/fibers/sync/mutex.hpp>
+#include <muesli/serializable.hpp>
+
+#include <timber/log.hpp>
+
+#include <whirl/node/runtime/shortcuts.hpp>
+#include <whirl/node/store/kv.hpp>
+
+#include <string>
 
 using namespace whirl;
 
@@ -22,16 +26,22 @@ class Replica : public commute::rpc::ServiceBase<Replica> {
 
   void RegisterMethods() override;
 
-  void LocalWrite(Key key, StampedValue target_value);
-  StampedValue LocalRead(Key key);
+  void LocalWrite(const Key& key, StampedValue target_value);
+  StampedValue LocalRead(const Key& key);
 
  private:
-  void Update(Key key, StampedValue target_value);
+  struct VersionedKey {
+    uint64_t version;
+    Key key;
+
+    MUESLI_SERIALIZABLE(version, key)
+  };
 
  private:
+  uint64_t GetLatestSequenceNumber() const;
+
+ private:
+  std::atomic<uint64_t> s_{0};
   node::store::KVStore<StampedValue> kv_store_;
   timber::Logger logger_;
-
-  // TODO: remove
-  await::fibers::Mutex m_;
 };

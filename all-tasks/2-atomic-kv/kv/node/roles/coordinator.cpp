@@ -13,19 +13,25 @@ void Coordinator::RegisterMethods() {
   COMMUTE_RPC_REGISTER_METHOD(Get);
 }
 
-void Coordinator::Set(Key key, Value value) {
-  WriteTimestamp write_ts = ChooseWriteTimestamp(key);
+void Coordinator::Set(const Key& key, Value value) {
+  WriteTimestamp write_ts = ChooseWriteTimestamp();
   SetStamped(key, {value, write_ts});
 }
 
-Value Coordinator::Get(Key key) {
+Value Coordinator::Get(const Key& key) {
   auto most_recent = GetStamped(key);
   SetStamped(key, most_recent);
   return most_recent.value;
 }
 
-WriteTimestamp Coordinator::ChooseWriteTimestamp(Key key) {
-  return {GetNextTimestamp(key), GetMyId(), GetLocalMonotonicNow()};
+WriteTimestamp Coordinator::ChooseWriteTimestamp() const {
+  // TODO: parallel waiting
+  auto [e, l] = node::rt::TrueTime()->Now();
+  while (!node::rt::TrueTime()->After(l)) {
+    await::fibers::Await(node::rt::After(l - e))
+        .ExpectOk("ChooseWriteTimestamp");
+  }
+  return {l.ToJiffies().Count(), node::rt::GenerateGuid()};
 }
 
 StampedValue Coordinator::FindMostRecent(
@@ -37,7 +43,7 @@ StampedValue Coordinator::FindMostRecent(
       });
 }
 
-void Coordinator::SetStamped(Key key, StampedValue sv) {
+void Coordinator::SetStamped(const Key& key, StampedValue sv) {
   LOG_INFO("Write timestamp: {}", sv.timestamp);
 
   std::vector<Future<void>> writes;
@@ -51,7 +57,7 @@ void Coordinator::SetStamped(Key key, StampedValue sv) {
   Await(Quorum(std::move(writes), /*threshold=*/Majority())).ThrowIfError();
 }
 
-StampedValue Coordinator::GetStamped(Key key) const {
+StampedValue Coordinator::GetStamped(const Key& key) const {
   std::vector<Future<StampedValue>> reads;
   for (const auto& peer : ListPeers().WithMe()) {
     reads.push_back(commute::rpc::Call("Replica.LocalRead")
@@ -67,16 +73,4 @@ StampedValue Coordinator::GetStamped(Key key) const {
 
 size_t Coordinator::Majority() const {
   return NodeCount() / 2 + 1;
-}
-
-int64_t Coordinator::GetMyId() const {
-  return node::rt::Config()->GetInt64("node.id");
-}
-
-uint64_t Coordinator::GetLocalMonotonicNow() const {
-  return whirl::node::rt::TimeService()->MonotonicNow().ToJiffies().Count();
-}
-
-uint64_t Coordinator::GetNextTimestamp(Key key) const {
-  return GetStamped(key).timestamp.value + 1;
 }
