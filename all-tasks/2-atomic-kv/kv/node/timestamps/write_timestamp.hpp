@@ -22,6 +22,6 @@ struct WriteTimestamp {
 };
 
 inline std::ostream& operator<<(std::ostream& out, const WriteTimestamp& ts) {
-  out << ts.time << " (" << ts.guid << ")";
+  out << "{" << ts.time << ", guid: " << ts.guid << "}";
   return out;
 }
