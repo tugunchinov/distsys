@@ -23,14 +23,25 @@ class Coordinator : public commute::rpc::ServiceBase<Coordinator>,
 
  private:
   template <typename T, typename... Args>
-  std::vector<await::futures::Future<T>> Call(std::string method, Args... args);
+  std::vector<await::futures::Future<T>> Call(const std::string& method,
+                                              Args&&... args);
+
+  await::futures::Future<void> Commit(const Key& key, const StampedValue& sv);
+
+  void SetStamped(const Key& key, const StampedValue& sv);
+  StampedValue GetStamped(const Key& key);
+
+  void WaitTill(const node::time::WallTime& wt) const;
+
+  WriteTimestamp ChooseTimestamp() const;
 
   StampedValue FindMostRecent(const std::vector<StampedValue>& values) const;
 
-  void SetStamped(const Key& key, StampedValue sv);
+  node::time::WallTime IntToWallTime(uint64_t val) const;
+  uint64_t WallTimeToInt(const node::time::WallTime& wt) const;
 
   size_t Majority() const;
 
  private:
-  timber::Logger logger_;
+  mutable timber::Logger logger_;
 };

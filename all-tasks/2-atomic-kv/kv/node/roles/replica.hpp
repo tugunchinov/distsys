@@ -26,7 +26,7 @@ class Replica : public commute::rpc::ServiceBase<Replica> {
 
   void RegisterMethods() override;
 
-  void LocalWrite(const Key& key, StampedValue target_value);
+  void LocalWrite(const Key& key, const StampedValue& target_value);
   StampedValue LocalRead(const Key& key);
 
  private:
