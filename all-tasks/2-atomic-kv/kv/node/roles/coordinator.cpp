@@ -14,24 +14,49 @@ void Coordinator::RegisterMethods() {
 }
 
 void Coordinator::Set(const Key& key, Value value) {
-  WriteTimestamp write_ts = ChooseWriteTimestamp();
-  SetStamped(key, {value, write_ts});
+  // TODO: make better
+  auto [e, l] = node::rt::TrueTime()->Now();
+  WriteTimestamp write_ts{e.ToJiffies().Count(), l.ToJiffies().Count(),
+                          node::rt::GenerateGuid()};
+
+  auto [f, p] = await::futures::MakeContract<void>();
+  await::fibers::Go(
+      [&key, &value, &write_ts, this, p = std::move(p)]() mutable {
+        await::fibers::self::SetContext(
+            await::context::New()
+                .StopToken(await::context::StopSource().GetToken())
+                .Done());
+        SetStamped(key, {value, write_ts});
+        std::move(p).Set();
+      });
+
+  while (!node::rt::TrueTime()->After(l)) {
+    Await(node::rt::After(l - e)).ExpectOk();
+  }
+  Await(std::move(f)).ExpectOk();
 }
 
 Value Coordinator::Get(const Key& key) {
-  auto most_recent = GetStamped(key);
-  SetStamped(key, most_recent);
-  return most_recent.value;
-}
-
-WriteTimestamp Coordinator::ChooseWriteTimestamp() const {
-  // TODO: parallel waiting
-  auto [e, l] = node::rt::TrueTime()->Now();
+  auto most_recent = FindMostRecent(
+      Await(Quorum(Call<StampedValue>("Replica.LocalRead", key), Majority()))
+          .ValueOrThrow());
+  LOG_INFO("Read {} -> {}", key, most_recent);
+  auto [f, p] = await::futures::MakeContract<void>();
+  await::fibers::Go([&key, &most_recent, this, p = std::move(p)]() mutable {
+    await::fibers::self::SetContext(
+        await::context::New()
+            .StopToken(await::context::StopSource().GetToken())
+            .Done());
+    SetStamped(key, most_recent);
+    std::move(p).Set();
+  });
+  auto l = node::time::WallTime(most_recent.timestamp.l);
+  auto e = node::time::WallTime(most_recent.timestamp.e);
   while (!node::rt::TrueTime()->After(l)) {
-    await::fibers::Await(node::rt::After(l - e))
-        .ExpectOk("ChooseWriteTimestamp");
+    Await(node::rt::After(l - e)).ExpectOk();
   }
-  return {l.ToJiffies().Count(), node::rt::GenerateGuid()};
+  Await(std::move(f)).ExpectOk();
+  return most_recent.value;
 }
 
 StampedValue Coordinator::FindMostRecent(
@@ -45,32 +70,22 @@ StampedValue Coordinator::FindMostRecent(
 
 void Coordinator::SetStamped(const Key& key, StampedValue sv) {
   LOG_INFO("Write timestamp: {}", sv.timestamp);
-
-  std::vector<Future<void>> writes;
-  for (const auto& peer : ListPeers().WithMe()) {
-    writes.push_back(commute::rpc::Call("Replica.LocalWrite")
-                         .Args<Key, StampedValue>(key, sv)
-                         .Via(Channel(peer))
-                         .Context(await::context::ThisFiber())
-                         .AtLeastOnce());
-  }
-  Await(Quorum(std::move(writes), /*threshold=*/Majority())).ThrowIfError();
-}
-
-StampedValue Coordinator::GetStamped(const Key& key) const {
-  std::vector<Future<StampedValue>> reads;
-  for (const auto& peer : ListPeers().WithMe()) {
-    reads.push_back(commute::rpc::Call("Replica.LocalRead")
-                        .Args(key)
-                        .Via(Channel(peer))
-                        .Context(await::context::ThisFiber())
-                        .AtLeastOnce());
-  }
-  auto stamped_values =
-      Await(Quorum(std::move(reads), /*threshold=*/Majority())).ValueOrThrow();
-  return FindMostRecent(stamped_values);
+  Await(Quorum(Call<void>("Replica.LocalWrite", key, sv), Majority()))
+      .ThrowIfError();
 }
 
 size_t Coordinator::Majority() const {
   return NodeCount() / 2 + 1;
+}
+template <typename T, typename... Args>
+std::vector<Future<T>> Coordinator::Call(std::string method, Args... args) {
+  std::vector<Future<T>> calls;
+  for (const auto& peer : ListPeers().WithMe()) {
+    calls.push_back(commute::rpc::Call(method)
+                        .Args<Args...>(args...)
+                        .Via(Channel(peer))
+                        .Context(await::context::ThisFiber())
+                        .AtLeastOnce());
+  }
+  return std::move(calls);
 }

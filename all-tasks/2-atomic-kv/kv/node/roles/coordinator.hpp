@@ -22,12 +22,12 @@ class Coordinator : public commute::rpc::ServiceBase<Coordinator>,
   Value Get(const Key& key);
 
  private:
-  WriteTimestamp ChooseWriteTimestamp() const;
+  template <typename T, typename... Args>
+  std::vector<await::futures::Future<T>> Call(std::string method, Args... args);
 
   StampedValue FindMostRecent(const std::vector<StampedValue>& values) const;
 
   void SetStamped(const Key& key, StampedValue sv);
-  StampedValue GetStamped(const Key& key) const;
 
   size_t Majority() const;
 
