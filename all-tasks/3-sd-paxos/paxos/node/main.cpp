@@ -1,8 +1,8 @@
 #include <paxos/node/main.hpp>
 
-#include <paxos/node/proposer.hpp>
-#include <paxos/node/acceptor.hpp>
-#include <paxos/node/learner.hpp>
+#include <paxos/node/roles/proposer.hpp>
+#include <paxos/node/roles/acceptor.hpp>
+#include <paxos/node/roles/learner.hpp>
 
 #include <whirl/node/rpc/server.hpp>
 #include <whirl/node/runtime/shortcuts.hpp>

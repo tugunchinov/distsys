@@ -1,9 +1,11 @@
 #pragma once
 
-#include <muesli/serializable.hpp>
-
 // Enable string serialization
 #include <cereal/types/string.hpp>
+
+#include <muesli/serializable.hpp>
+
+#include <whirl/node/runtime/shortcuts.hpp>
 
 #include <string>
 #include <ostream>
@@ -20,27 +22,25 @@ using Value = std::string;
 
 struct ProposalNumber {
   uint64_t k{0};
-  int64_t id{0};
-  uint64_t local_time{0};
+  std::string guid{whirl::node::rt::GenerateGuid()};
 
   static ProposalNumber Zero() {
     return {};
   }
 
   ProposalNumber operator+(uint64_t value) const {
-    return {k + value, id, local_time};
+    return {k + value, whirl::node::rt::GenerateGuid()};
   }
 
   bool operator<(const ProposalNumber& that) const {
-    return std::tie(k, id, local_time) <
-           std::tie(that.k, that.id, that.local_time);
+    return std::tie(k, guid) < std::tie(that.k, that.guid);
   }
 
-  MUESLI_SERIALIZABLE(k, id, local_time)
+  MUESLI_SERIALIZABLE(k, guid)
 };
 
 inline std::ostream& operator<<(std::ostream& out, const ProposalNumber& n) {
-  out << "{" << n.k << ", " << n.id << ", " << n.local_time << "}";
+  out << "{" << n.k << ", " << n.guid << "}";
   return out;
 }
 

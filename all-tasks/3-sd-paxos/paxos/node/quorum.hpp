@@ -23,6 +23,7 @@ struct Verdict {
   }
 
   bool accepted{false};
+
   ProposalNumber advice{};
   std::vector<typename Phase::Response> votes;
 };

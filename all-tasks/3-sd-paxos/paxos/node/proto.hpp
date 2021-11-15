@@ -20,8 +20,9 @@ struct Prepare {
   // Prepare
   struct Request {
     ProposalNumber n;
+    size_t idx{0};
 
-    MUESLI_SERIALIZABLE(n)
+    MUESLI_SERIALIZABLE(n, idx)
   };
 
   // Promise
@@ -42,8 +43,9 @@ struct Accept {
   // Accept
   struct Request {
     Proposal proposal;
+    size_t idx{0};
 
-    MUESLI_SERIALIZABLE(proposal)
+    MUESLI_SERIALIZABLE(proposal, idx)
   };
 
   // Accepted
