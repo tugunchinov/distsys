@@ -6,7 +6,10 @@
 
 #include <await/fibers/core/api.hpp>
 #include <await/fibers/sync/channel.hpp>
+#include <await/fibers/sync/select.hpp>
 #include <await/fibers/sync/mutex.hpp>
+
+#include <await/futures/util/never.hpp>
 
 #include <timber/log.hpp>
 
@@ -19,6 +22,8 @@
 
 #include <whirl/node/store/kv.hpp>
 
+#include <set>
+
 using await::fibers::Channel;
 using await::futures::Future;
 using await::futures::Promise;
@@ -28,6 +33,11 @@ using namespace whirl;
 namespace rsm {
 
 //////////////////////////////////////////////////////////////////////
+
+struct Commit {
+  size_t idx;
+  Command command;
+};
 
 class MultiPaxos : public IReplica, public node::cluster::Peer {
  public:
@@ -41,55 +51,15 @@ class MultiPaxos : public IReplica, public node::cluster::Peer {
   }
 
   Future<Response> Execute(Command command) override {
-    auto [future, promise] = await::futures::MakeContract<Response>();
+    auto [f, p] = await::futures::MakeContract<Response>();
 
-    await::fibers::Go([this, p = std::move(promise), command]() mutable {
-      uint64_t idx{1};
+    ps_.emplace(command.request_id, std::move(p));
+    commands_.TrySend(command);
 
-      while (true) {
-        auto current_command = command;
-        {
-          auto guard = mutex_.Guard();
-
-          while (!log_.IsEmpty(idx)) {
-            ++idx;
-          }
-
-          log_.Update(idx, LogEntry::Empty());
-        }
-
-        Command app_com;
-        for (const auto& peer : ListPeers().WithMe()) {
-          auto applied = await::fibers::Await(
-              commute::rpc::Call("Proposer.Propose")
-                  .Args(muesli::Serialize(current_command), idx)
-                  .Via(Channel(peer))
-                  .AtLeastOnce()
-                  .Start()
-                  .As<muesli::Bytes>());
-          if (applied.IsOk()) {
-            app_com = muesli::Deserialize<Command>(applied.ValueOrThrow());
-            break;
-          }
-        }
-
-        {
-          auto guard = mutex_.Guard();
-
-          if (app_com == command) {
-            LOG_INFO("Executing command {}", app_com);
-
-            auto response = state_machine_->Apply(app_com);
-            std::move(p).SetValue(Ack{response});
-            break;
-          }
-        }
-      }
-    });
-
-    return std::move(future);
+    return std::move(f);
   };
 
+ private:
   void Start(commute::rpc::IServer* server) {
     // Reset state machine state
     state_machine_->Reset();
@@ -98,7 +68,56 @@ class MultiPaxos : public IReplica, public node::cluster::Peer {
     log_.Open();
 
     // Launch pipeline fibers
-    // ...
+    await::fibers::Go([this]() {
+      while (true) {
+        auto next = await::fibers::Select(commands_, commits_);
+        if (next.index() == 0) {
+          auto command = get<0>(next);
+          size_t idx = latest_applied_ + 1;
+          while (!log_.IsEmpty(idx)) {
+            ++idx;
+          }
+          log_.Update(idx, LogEntry::Empty());
+
+          commute::rpc::Call("Proposer.Propose")
+              .Args(command, idx)
+              .Via(LoopBack())
+              .Start()
+              .As<Command>()
+              .Subscribe([this, idx, command](wheels::Result<Command>&& res) {
+                if (*res != command) {
+                  commands_.TrySend(command);
+                }
+                commits_.TrySend({idx, *res});
+              });
+        } else {
+          auto commit = get<1>(next);
+
+          log_.Update(commit.idx, {commit.command, true, false});
+
+          to_apply_.emplace(commit.idx);
+          if (latest_applied_ + 1 == commit.idx) {
+            for (size_t i = commit.idx; to_apply_.contains(i); ++i) {
+              applyings_.TrySend(i);
+              latest_applied_ = i;
+            }
+          }
+        }
+      }
+    });
+
+    await::fibers::Go([this]() {
+      while (true) {
+        size_t idx = applyings_.Receive();
+        auto command = log_.Read(idx)->command;
+        LOG_INFO("Executing command {}", command);
+        auto resp = state_machine_->Apply(command);
+        if (ps_.contains(command.request_id)) {
+          LOG_INFO("Setting promise for {}", command);
+          std::move(ps_.at(command.request_id)).SetValue(Ack{resp});
+        }
+      }
+    });
 
     // Register RPC services
     auto db_path = node::rt::Config()->GetString("db.path");
@@ -106,7 +125,6 @@ class MultiPaxos : public IReplica, public node::cluster::Peer {
 
     server->RegisterService("Proposer", std::make_shared<paxos::Proposer>());
     server->RegisterService("Acceptor", std::make_shared<paxos::Acceptor>());
-    server->RegisterService("Learner", std::make_shared<paxos::Learner>());
   }
 
  private:
@@ -116,7 +134,13 @@ class MultiPaxos : public IReplica, public node::cluster::Peer {
   // Persistent log
   Log log_;
 
-  await::fibers::Mutex mutex_;
+  await::fibers::Channel<Command> commands_;
+  await::fibers::Channel<Commit> commits_;
+  await::fibers::Channel<size_t> applyings_;
+
+  std::map<RequestId, await::futures::Promise<Response>> ps_;
+  std::set<size_t> to_apply_;
+  size_t latest_applied_{0};
 
   // Logging
   timber::Logger logger_;

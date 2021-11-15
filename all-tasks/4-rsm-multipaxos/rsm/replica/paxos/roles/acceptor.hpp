@@ -1,7 +1,10 @@
 #pragma once
 
+#include <await/fibers/sync/mutex.hpp>
+
 #include <commute/rpc/service_base.hpp>
 
+#include <rsm/replica/paxos/roles/acceptor_state.hpp>
 #include <rsm/replica/paxos/roles/learner.hpp>
 #include <rsm/replica/paxos/proto.hpp>
 
@@ -11,13 +14,6 @@
 #include <whirl/node/store/kv.hpp>
 
 namespace paxos {
-
-struct AcceptorState {
-  ProposalNumber np{ProposalNumber::Zero()};
-  std::optional<Proposal> vote{std::nullopt};
-
-  MUESLI_SERIALIZABLE(np, vote)
-};
 
 class AcceptorImpl {
  public:
@@ -37,7 +33,7 @@ class AcceptorImpl {
   proto::Accept::Response Vote() const;
 
  private:
-  timber::Logger logger_;
+  mutable timber::Logger logger_;
   whirl::node::store::KVStore<AcceptorState>& state_store_;
   std::string idx_;
   AcceptorState state_;
@@ -53,7 +49,7 @@ class Acceptor : public commute::rpc::ServiceBase<Acceptor> {
   void Prepare(const proto::Prepare::Request& request,
                proto::Prepare::Response* response) {
     {
-      m_.Guard();
+      auto guard = m_.Guard();
       if (!indexed_acceptors_.contains(request.idx)) {
         indexed_acceptors_.try_emplace(request.idx, state_store_, request.idx);
       }

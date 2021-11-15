@@ -1,7 +1,5 @@
 #pragma once
 
-#include <rsm/replica/store/log.hpp>
-
 #include <await/fibers/sync/mutex.hpp>
 
 #include <commute/rpc/service_base.hpp>
@@ -9,12 +7,13 @@
 #include <rsm/replica/paxos/proposal.hpp>
 #include <rsm/replica/paxos/proto.hpp>
 #include <rsm/replica/paxos/quorum.hpp>
+#include <rsm/replica/store/log.hpp>
 
 namespace paxos {
 
 class Learner : public commute::rpc::ServiceBase<Learner> {
  public:
-  Learner();
+  Learner(rsm::Log& log);
 
  protected:
   void LearnChosen(Value chosen, size_t idx);
@@ -22,7 +21,7 @@ class Learner : public commute::rpc::ServiceBase<Learner> {
   void RegisterMethods() override;
 
  private:
-  rsm::Log log_;
+  rsm::Log& log_;
   await::fibers::Mutex m_;
 };
 

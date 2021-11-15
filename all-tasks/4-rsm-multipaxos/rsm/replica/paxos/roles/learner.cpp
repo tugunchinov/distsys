@@ -1,5 +1,3 @@
-#include <await/fibers/core/await.hpp>
-
 #include <rsm/replica/paxos/roles/learner.hpp>
 
 #include <whirl/node/runtime/shortcuts.hpp>
@@ -8,7 +6,7 @@ using namespace whirl;
 
 namespace paxos {
 
-Learner::Learner() : log_(node::rt::Config()->GetString("rsm.store.dir")) {
+Learner::Learner(rsm::Log& log) : log_(log) {
   log_.Open();
 }
 

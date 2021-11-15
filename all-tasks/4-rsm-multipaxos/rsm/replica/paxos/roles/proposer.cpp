@@ -23,17 +23,18 @@ ProposerImpl::ProposerImpl(const Value& input, size_t idx)
 }
 
 Value ProposerImpl::Propose() {
-  Prepare();
-  if (promised_) {
-    Accept();
-    if (accepted_) {
-      Decide();
-      return proposal_.value;
+  while (true) {
+    Prepare();
+    if (promised_) {
+      Accept();
+      if (accepted_) {
+        // Decide();
+        return proposal_.value;
+      }
     }
+    accepted_ = promised_ = false;
+    Wait();
   }
-  accepted_ = promised_ = false;
-  Wait();
-  return Propose();
 }
 
 template <typename Phase>
