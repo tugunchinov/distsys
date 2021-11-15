@@ -27,7 +27,7 @@ Value ProposerImpl::Propose() {
   if (promised_) {
     Accept();
     if (accepted_) {
-      Decide();
+      // Decide();
       return proposal_.value;
     }
   }
@@ -97,18 +97,6 @@ uint64_t ProposerImpl::Majority() const {
   return peer_.NodeCount() / 2 + 1;
 }
 
-int64_t ProposerImpl::GetMyID() const {
-  return node::rt::Config()->GetInt64("node.id");
-}
-
-uint64_t ProposerImpl::GetLocalMonotonicNow() {
-  return Await(commute::rpc::Call("Proposer.GetLocalMonotonicNow")
-                   .Args()
-                   .Via(peer_.Channel(node::rt::HostName()))
-                   .Start()
-                   .As<uint64_t>())
-      .ValueOrThrow();
-}
 Backoff ProposerImpl::GetBackoff() const {
   uint64_t init = node::rt::Config()->GetInt<uint64_t>("paxos.backoff.init");
   uint64_t max = node::rt::Config()->GetInt<uint64_t>("paxos.backoff.max");
