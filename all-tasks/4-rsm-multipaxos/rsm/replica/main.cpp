@@ -13,6 +13,9 @@ using namespace whirl;
 namespace rsm {
 
 void ReplicaMain(IStateMachinePtr state_machine) {
+  auto db_path = whirl::node::rt::Config()->GetString("db.path");
+  whirl::node::rt::Database()->Open(db_path);
+
   auto rpc_server = whirl::node::rpc::MakeServer(
       node::rt::Config()->GetInt<uint16_t>("rpc.port"));
 

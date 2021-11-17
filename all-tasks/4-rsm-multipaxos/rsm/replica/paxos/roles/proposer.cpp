@@ -1,3 +1,5 @@
+#include <await/futures/combine/quorum.hpp>
+
 #include <commute/rpc/call.hpp>
 
 #include <rsm/replica/paxos/quorum.hpp>
@@ -24,11 +26,15 @@ ProposerImpl::ProposerImpl(const Value& input, size_t idx)
 
 Value ProposerImpl::Propose() {
   while (true) {
+    if (auto maybe_chosen = CheckMaybeChosen()) {
+      return *maybe_chosen;
+    }
+
     Prepare();
     if (promised_) {
       Accept();
       if (accepted_) {
-        // Decide();
+        Decide();  // Learn?
         return proposal_.value;
       }
     }
@@ -59,8 +65,17 @@ auto ProposerImpl::CallAcceptor(const typename Phase::Request& request) {
   return Await(PaxosQuorum<Phase>(std::move(requests), Majority()));
 }
 
+std::optional<Value> ProposerImpl::CheckMaybeChosen() {
+  return Await(commute::rpc::Call("Learner.TryGetChosen")
+                   .Args(idx_)
+                   .Via(peer_.LoopBack())
+                   .Start()
+                   .As<std::optional<Value>>())
+      .ValueOrThrow();
+}
+
 void ProposerImpl::Prepare() {
-  LOG_INFO("Chose n = {}", proposal_.n);
+  LOG_INFO("n = {}", proposal_.n);
   proto::Prepare::Request request{proposal_.n, idx_};
   auto verdict = CallAcceptor<proto::Prepare>(request);
   if (verdict.HasError() || !verdict->accepted) {
@@ -86,12 +101,15 @@ void ProposerImpl::Accept() {
 }
 
 void ProposerImpl::Decide() {
-  Await(commute::rpc::Call("Learner.LearnChosen")
-            .Args(proposal_.value, idx_)
-            .Via(peer_.LoopBack())
-            .Start()
-            .As<void>())
-      .ExpectOk();
+  std::vector<Future<void>> calls;
+  for (const auto& peer : peer_.ListPeers().WithMe()) {
+    calls.push_back(commute::rpc::Call("Learner.LearnChosen")
+                        .Args(proposal_.value, idx_)
+                        .Via(peer_.Channel(peer))
+                        .Context(await::context::ThisFiber())
+                        .AtLeastOnce());
+  }
+  Await(Quorum(std::move(calls), Majority())).ThrowIfError();
 }
 
 uint64_t ProposerImpl::Majority() const {
@@ -111,7 +129,7 @@ std::optional<Proposal> ProposerImpl::GetLatest(
   return std::max_element(responses.begin(), responses.end(),
                           [](const proto::Prepare::Response& lhs,
                              const proto::Prepare::Response& rhs) {
-                            return lhs.vote->n < rhs.vote->n;
+                            return !lhs.vote || lhs.vote->n < rhs.vote->n;
                           })
       ->vote;
 }

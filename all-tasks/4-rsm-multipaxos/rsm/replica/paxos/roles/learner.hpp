@@ -5,24 +5,26 @@
 #include <commute/rpc/service_base.hpp>
 
 #include <rsm/replica/paxos/proposal.hpp>
-#include <rsm/replica/paxos/proto.hpp>
-#include <rsm/replica/paxos/quorum.hpp>
-#include <rsm/replica/store/log.hpp>
+
+#include <timber/logger.hpp>
+
+#include <whirl/node/store/kv.hpp>
 
 namespace paxos {
 
 class Learner : public commute::rpc::ServiceBase<Learner> {
  public:
-  Learner(rsm::Log& log);
+  explicit Learner();
 
  protected:
   void LearnChosen(Value chosen, size_t idx);
+  std::optional<Value> TryGetChosen(size_t idx);
 
   void RegisterMethods() override;
 
  private:
-  rsm::Log& log_;
-  await::fibers::Mutex m_;
+  timber::Logger logger_;
+  whirl::node::store::KVStore<Value> chosen_store_;
 };
 
 }  // namespace paxos

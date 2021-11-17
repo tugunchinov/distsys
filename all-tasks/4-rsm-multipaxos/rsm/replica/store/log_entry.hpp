@@ -8,16 +8,14 @@
 namespace rsm {
 
 struct LogEntry {
-  Command command{};
-  bool committed{false};
-  bool applied{false};
+  Command command;
 
   // Make empty log entry
   static LogEntry Empty() {
     return {};
   }
 
-  MUESLI_SERIALIZABLE(command, committed, applied)
+  MUESLI_SERIALIZABLE(command);
 };
 
 }  // namespace rsm

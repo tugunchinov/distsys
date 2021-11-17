@@ -38,7 +38,7 @@ class PaxosQuorumCombinator {
 
   void ProcessInput(wheels::Result<typename Phase::Response> result,
                     size_t /*index*/) {
-    std::lock_guard lock(mutex_);
+    auto guard = mutex_.Guard();
 
     if (completed_) {
       return;
