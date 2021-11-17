@@ -1,4 +1,4 @@
-#include <node/roles/acceptor.hpp>
+#include <paxos/node/roles/acceptor.hpp>
 
 #include <timber/log.hpp>
 
@@ -20,7 +20,7 @@ AcceptorImpl::AcceptorImpl(node::store::KVStore<AcceptorState>& state_store,
 }
 
 Prepare::Response AcceptorImpl::Prepare(const Prepare::Request& request) {
-  m_.Guard();
+  auto guard = m_.Guard();
   if (request.n < state_.np) {
     LOG_INFO("nack P{}", request.n);
 
@@ -36,7 +36,7 @@ Prepare::Response AcceptorImpl::Prepare(const Prepare::Request& request) {
 }
 
 Accept::Response AcceptorImpl::Accept(const Accept::Request& request) {
-  m_.Guard();
+  auto guard = m_.Guard();
   if (request.proposal.n < state_.np) {
     LOG_INFO("nack A{}", request.proposal);
 

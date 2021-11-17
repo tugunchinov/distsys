@@ -28,6 +28,8 @@ class ProposerImpl {
 
   Backoff GetBackoff() const;
 
+  std::optional<Value> CheckMaybeChosen();
+
   void Prepare();
   void Accept();
   void Wait();
