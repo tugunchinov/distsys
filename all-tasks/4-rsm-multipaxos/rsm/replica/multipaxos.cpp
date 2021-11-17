@@ -1,6 +1,3 @@
-#pragma clang diagnostic push
-#pragma ide diagnostic ignored "EndlessLoop"
-
 #include <await/fibers/core/api.hpp>
 #include <await/fibers/sync/channel.hpp>
 #include <await/fibers/sync/select.hpp>
@@ -260,5 +257,3 @@ IReplicaPtr MakeMultiPaxosReplica(IStateMachinePtr state_machine,
 }
 
 }  // namespace rsm
-
-#pragma clang diagnostic pop
