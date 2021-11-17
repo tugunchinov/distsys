@@ -14,8 +14,10 @@ Learner::Learner()
 }
 
 void Learner::LearnChosen(Value chosen, size_t idx) {
-  LOG_INFO("Learn {} at index {}", chosen, idx);
-  chosen_store_.Put(fmt::to_string(idx), chosen);
+  if (!chosen_store_.Has(fmt::to_string(idx))) {
+    LOG_INFO("Learn {} at index {}", chosen, idx);
+    chosen_store_.Put(fmt::to_string(idx), chosen);
+  }
 }
 
 std::optional<Value> Learner::TryGetChosen(size_t idx) {
