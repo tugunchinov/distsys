@@ -116,7 +116,8 @@ uint64_t ProposerImpl::Majority() const {
 }
 
 Backoff ProposerImpl::GetBackoff() const {
-  uint64_t init = node::rt::Config()->GetInt<uint64_t>("paxos.backoff.init");
+  uint64_t init = node::rt::RandomNumber(
+      node::rt::Config()->GetInt<uint64_t>("paxos.backoff.init"));
   uint64_t max = node::rt::Config()->GetInt<uint64_t>("paxos.backoff.max");
   uint64_t factor =
       node::rt::Config()->GetInt<uint64_t>("paxos.backoff.factor");
