@@ -35,6 +35,8 @@ class ProposerImpl {
   void Wait();
   void Decide();
 
+  void ApproveCommit();
+
   template <typename Phase>
   auto CallAcceptor(const typename Phase::Request& request);
 

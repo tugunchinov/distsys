@@ -38,7 +38,6 @@ class Acceptor : public commute::rpc::ServiceBase<Acceptor> {
   mutable timber::Logger logger_;
   rsm::Log& log_;
   await::fibers::Mutex& log_lock_;
-  std::map<size_t, AcceptorState> states_;
 };
 
 }  // namespace paxos

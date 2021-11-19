@@ -43,6 +43,7 @@ class MultiPaxos : public IReplica {
   Future<Response> Execute(Command command) override {
     auto [f, p] = await::futures::MakeContract<Response>();
 
+    LOG_INFO("New command {}", command);
     promises_.emplace(command.request_id, std::move(p));
     commands_.TrySend(std::move(command));
 
@@ -74,10 +75,13 @@ class MultiPaxos : public IReplica {
 
         if (const auto* command = std::get_if<Command>(&next)) {
           size_t idx = ChooseIndexForCommand();
+          LOG_INFO("Chose index {} for {}", idx, *command);
           ProposeCommand(std::move(*command), idx);
         } else if (const auto* commit = std::get_if<paxos::Commit>(&next)) {
+          LOG_INFO("Committing command {} at {}", commit->command, commit->idx);
           committed_commands_[commit->idx] = commit->command;
           if (last_sent_ + 1 == commit->idx) {
+            LOG_INFO("Sending commands from{} ", commit->idx);
             SendCommitted();
           }
         }
@@ -89,6 +93,7 @@ class MultiPaxos : public IReplica {
         auto commands = to_apply_.Receive();
         for (auto command : commands) {
           if (IsOldCommand(command)) {
+            LOG_INFO("Skipped {}", command);
             continue;
           }
           if (!HaveResponse(command)) {
@@ -98,8 +103,9 @@ class MultiPaxos : public IReplica {
         SaveState();
         for (const auto& command : commands) {
           if (HaveResponse(command) && NeedRespond(command)) {
+            LOG_INFO("Responding to {}", command.request_id.client_id);
             Respond(command.request_id,
-                    std::move(last_response_[command.request_id.client_id]));
+                    last_response_[command.request_id.client_id]);
           }
         }
       }
@@ -109,7 +115,8 @@ class MultiPaxos : public IReplica {
     server->RegisterService("Acceptor",
                             std::make_shared<paxos::Acceptor>(log_, log_lock_));
     server->RegisterService("Proposer", std::make_shared<paxos::Proposer>());
-    server->RegisterService("Learner", std::make_shared<paxos::Learner>());
+    server->RegisterService("Learner",
+                            std::make_shared<paxos::Learner>(commits_));
   }
 
   void RestoreState() {
@@ -119,29 +126,21 @@ class MultiPaxos : public IReplica {
       last_response_ = state->last_response;
       state_machine_->InstallSnapshot(state->sm_snapshot);
     }
-
-    for (size_t i = 1; !log_.IsEmpty(i); ++i) {
-      ProposeCommand(Command(), i);
-      last_idx_ = i;
-    }
   }
 
   size_t ChooseIndexForCommand() {
-    auto guard = log_lock_.Guard();
-    if (log_.IsEmpty(++last_idx_)) {
-      log_.Update(last_idx_, LogEntry::Empty());
-    }
-    return last_idx_;
+    return ++last_idx_;
   }
 
   void ProposeCommand(Command command, size_t idx) {
+    LOG_INFO("Proposing {} at {}", command, idx);
     commute::rpc::Call("Proposer.Propose")
         .Args(command, idx)
         .Via(peer_.LoopBack())
         .Start()
         .As<Command>()
         .Subscribe([this, command, idx](wheels::Result<Command>&& res) {
-          commits_.TrySend({idx, *res});
+          LOG_INFO("Chose {} at {}", *res, idx);
           if (*res != command) {
             commands_.TrySend(std::move(command));
           }
@@ -149,7 +148,6 @@ class MultiPaxos : public IReplica {
   }
 
   void SendCommitted() {
-    LOG_INFO("Sending committed commands");
     std::vector<Command> commands;
     while (committed_commands_.contains(last_sent_ + 1)) {
       commands.push_back(committed_commands_[++last_sent_]);

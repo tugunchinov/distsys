@@ -20,32 +20,25 @@ Acceptor::Acceptor(rsm::Log& log, Mutex& log_lock)
 void Acceptor::Prepare(const proto::Prepare::Request& request,
                        proto::Prepare::Response* response) {
   auto guard = log_lock_.Guard();
-  if (!states_.contains(request.idx)) {
-    states_[request.idx] =
-        log_.Read(request.idx).value_or(AcceptorState::Empty());
-  }
-  if (request.n < states_[request.idx].np) {
+  auto state = log_.Read(request.idx).value_or(AcceptorState::Empty());
+  if (request.n < state.np) {
     LOG_INFO("nack P{}", request.n);
 
-    *response = Reject<paxos::Prepare>(states_[request.idx].np);
+    *response = Reject<paxos::Prepare>(state.np);
   } else {
     LOG_INFO("ack P{}", request.n);
 
-    states_[request.idx].np = request.n;
-    log_.Update(request.idx, states_[request.idx]);
+    state.np = request.n;
+    log_.Update(request.idx, state);
 
-    *response = Promise(states_[request.idx].vote);
+    *response = Promise(state.vote);
   }
 }
 
 void Acceptor::Accept(const proto::Accept::Request& request,
                       proto::Accept::Response* response) {
   auto guard = log_lock_.Guard();
-  if (!states_.contains(request.idx)) {
-    states_[request.idx] =
-        log_.Read(request.idx).value_or(AcceptorState::Empty());
-  }
-  auto state = states_[request.idx];
+  auto state = log_.Read(request.idx).value_or(AcceptorState::Empty());
   if (request.proposal.n < state.np) {
     LOG_INFO("nack A{}", request.proposal);
 
@@ -55,7 +48,6 @@ void Acceptor::Accept(const proto::Accept::Request& request,
 
     state.np = request.proposal.n;
     state.vote = request.proposal;
-    states_[request.idx] = state;
     log_.Update(request.idx, state);
 
     *response = Vote();

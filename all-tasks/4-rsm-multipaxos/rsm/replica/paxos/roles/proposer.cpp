@@ -27,13 +27,16 @@ ProposerImpl::ProposerImpl(const Value& input, size_t idx)
 Value ProposerImpl::Propose() {
   while (true) {
     if (auto maybe_chosen = CheckMaybeChosen()) {
-      return *maybe_chosen;
+      proposal_.value = *maybe_chosen;
+      ApproveCommit();
+      return proposal_.value;
     }
 
     Prepare();
     if (promised_) {
       Accept();
       if (accepted_) {
+        ApproveCommit();
         Decide();  // Learn?
         return proposal_.value;
       }
@@ -110,6 +113,15 @@ void ProposerImpl::Decide() {
                         .AtLeastOnce());
   }
   Await(Quorum(std::move(calls), Majority())).ThrowIfError();
+}
+
+void ProposerImpl::ApproveCommit() {
+  Await(commute::rpc::Call("Learner.ApproveCommit")
+            .Args(proposal_.value, idx_)
+            .Via(peer_.LoopBack())
+            .Start()
+            .As<void>())
+      .ThrowIfError();
 }
 
 uint64_t ProposerImpl::Majority() const {
