@@ -36,6 +36,10 @@ void Log::TruncatePrefix(size_t end_index) {
   impl_->TruncatePrefix(end_index);
 }
 
+size_t Log::LastIndex() const {
+  return impl_->LastIndex();
+}
+
 std::shared_ptr<Log::ILogImpl> Log::MakeLogImpl(
     const persist::fs::Path& store_dir) {
   const auto log_path = store_dir / "log";

@@ -11,66 +11,74 @@ namespace paxos {
 using namespace proto;
 using namespace await::fibers;
 
-AcceptorImpl::AcceptorImpl(node::store::KVStore<AcceptorState>& state_store,
-                           size_t idx)
+Acceptor::Acceptor(rsm::Log& log, Mutex& log_lock)
     : logger_("Paxos.Acceptor", node::rt::LoggerBackend()),
-      state_store_(state_store),
-      idx_(fmt::to_string(idx)),
-      state_(GetState()) {
+      log_(log),
+      log_lock_(log_lock) {
 }
 
-Prepare::Response AcceptorImpl::Prepare(const Prepare::Request& request) {
-  auto guard = m_.Guard();
-  if (request.n < state_.np) {
+void Acceptor::Prepare(const proto::Prepare::Request& request,
+                       proto::Prepare::Response* response) {
+  auto guard = log_lock_.Guard();
+  if (!states_.contains(request.idx)) {
+    states_[request.idx] =
+        log_.Read(request.idx).value_or(AcceptorState::Empty());
+  }
+  if (request.n < states_[request.idx].np) {
     LOG_INFO("nack P{}", request.n);
 
-    return Reject<paxos::Prepare>();
+    *response = Reject<paxos::Prepare>(states_[request.idx].np);
   } else {
     LOG_INFO("ack P{}", request.n);
 
-    state_.np = request.n;
-    UpdateState();
+    states_[request.idx].np = request.n;
+    log_.Update(request.idx, states_[request.idx]);
 
-    return Promise();
+    *response = Promise(states_[request.idx].vote);
   }
 }
 
-Accept::Response AcceptorImpl::Accept(const Accept::Request& request) {
-  auto guard = m_.Guard();
-  if (request.proposal.n < state_.np) {
+void Acceptor::Accept(const proto::Accept::Request& request,
+                      proto::Accept::Response* response) {
+  auto guard = log_lock_.Guard();
+  if (!states_.contains(request.idx)) {
+    states_[request.idx] =
+        log_.Read(request.idx).value_or(AcceptorState::Empty());
+  }
+  auto state = states_[request.idx];
+  if (request.proposal.n < state.np) {
     LOG_INFO("nack A{}", request.proposal);
 
-    return Reject<paxos::Accept>();
+    *response = Reject<paxos::Accept>(state.np);
   } else {
     LOG_INFO("ack A{}", request.proposal);
 
-    state_.np = request.proposal.n;
-    state_.vote = request.proposal;
-    UpdateState();
+    state.np = request.proposal.n;
+    state.vote = request.proposal;
+    states_[request.idx] = state;
+    log_.Update(request.idx, state);
 
-    return Vote();
+    *response = Vote();
   }
 }
 
-AcceptorState AcceptorImpl::GetState() const {
-  return state_store_.GetOr(idx_, {});
-}
-
-void AcceptorImpl::UpdateState() {
-  state_store_.Put(idx_, state_);
-}
-
 template <typename Phase>
-typename Phase::Response AcceptorImpl::Reject() const {
-  return {.ack = false, .advice = state_.np};
+typename Phase::Response Acceptor::Reject(const ProposalNumber& np) const {
+  return {.ack = false, .advice = np};
 }
 
-proto::Prepare::Response AcceptorImpl::Promise() const {
-  return {.ack = true, .vote = state_.vote};
+proto::Prepare::Response Acceptor::Promise(
+    const std::optional<Proposal>& vote) const {
+  return {.ack = true, .vote = vote};
 }
 
-proto::Accept::Response AcceptorImpl::Vote() const {
+proto::Accept::Response Acceptor::Vote() const {
   return {.ack = true};
+}
+
+void Acceptor::RegisterMethods() {
+  COMMUTE_RPC_REGISTER_HANDLER(Prepare);
+  COMMUTE_RPC_REGISTER_HANDLER(Accept);
 }
 
 }  // namespace paxos

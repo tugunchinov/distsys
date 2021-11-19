@@ -7,15 +7,6 @@
 
 namespace rsm {
 
-struct LogEntry {
-  Command command;
-
-  // Make empty log entry
-  static LogEntry Empty() {
-    return {};
-  }
-
-  MUESLI_SERIALIZABLE(command);
-};
+using LogEntry = paxos::AcceptorState;
 
 }  // namespace rsm

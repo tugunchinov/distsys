@@ -18,8 +18,6 @@
 #include <whirl/node/cluster/peer.hpp>
 #include <whirl/node/store/kv.hpp>
 
-#include <set>
-
 using await::fibers::Channel;
 using await::futures::Future;
 using await::futures::Promise;
@@ -30,11 +28,11 @@ namespace rsm {
 
 //////////////////////////////////////////////////////////////////////
 
-class MultiPaxos : public IReplica, public node::cluster::Peer {
+class MultiPaxos : public IReplica {
  public:
   MultiPaxos(IStateMachinePtr state_machine, persist::fs::Path store_dir,
              commute::rpc::IServer* server)
-      : Peer(node::rt::Config()),
+      : peer_(node::rt::Config()),
         state_machine_(std::move(state_machine)),
         state_(node::rt::Database(), "RSM state"),
         log_(store_dir),
@@ -60,11 +58,6 @@ class MultiPaxos : public IReplica, public node::cluster::Peer {
     MUESLI_SERIALIZABLE(sm_snapshot, last_applied, last_response)
   };
 
-  struct Commit {
-    size_t idx;
-    Command command;
-  };
-
  private:
   void Start(commute::rpc::IServer* server) {
     // Open log on disk
@@ -79,11 +72,11 @@ class MultiPaxos : public IReplica, public node::cluster::Peer {
       while (true) {
         auto next = await::fibers::Select(commands_, commits_);
 
-        if (const Command* command = std::get_if<Command>(&next)) {
+        if (const auto* command = std::get_if<Command>(&next)) {
           size_t idx = ChooseIndexForCommand();
           ProposeCommand(std::move(*command), idx);
-        } else if (const Commit* commit = std::get_if<Commit>(&next)) {
-          MakeCommit(*commit);
+        } else if (const auto* commit = std::get_if<paxos::Commit>(&next)) {
+          committed_commands_[commit->idx] = commit->command;
           if (last_sent_ + 1 == commit->idx) {
             SendCommitted();
           }
@@ -113,8 +106,9 @@ class MultiPaxos : public IReplica, public node::cluster::Peer {
     });
 
     // Register RPC services
+    server->RegisterService("Acceptor",
+                            std::make_shared<paxos::Acceptor>(log_, log_lock_));
     server->RegisterService("Proposer", std::make_shared<paxos::Proposer>());
-    server->RegisterService("Acceptor", std::make_shared<paxos::Acceptor>());
     server->RegisterService("Learner", std::make_shared<paxos::Learner>());
   }
 
@@ -127,24 +121,23 @@ class MultiPaxos : public IReplica, public node::cluster::Peer {
     }
 
     for (size_t i = 1; !log_.IsEmpty(i); ++i) {
-      ProposeCommand(log_.Read(i)->command, i);
+      ProposeCommand(Command(), i);
+      last_idx_ = i;
     }
   }
 
   size_t ChooseIndexForCommand() {
-    size_t idx = last_sent_ + 1;
-    while (!log_.IsEmpty(idx)) {
-      ++idx;
+    auto guard = log_lock_.Guard();
+    if (log_.IsEmpty(++last_idx_)) {
+      log_.Update(last_idx_, LogEntry::Empty());
     }
-    log_.Update(idx, LogEntry::Empty());
-    return idx;
+    return last_idx_;
   }
 
   void ProposeCommand(Command command, size_t idx) {
-    LOG_INFO("Start proposing {} at {}", command, idx);
     commute::rpc::Call("Proposer.Propose")
         .Args(command, idx)
-        .Via(LoopBack())
+        .Via(peer_.LoopBack())
         .Start()
         .As<Command>()
         .Subscribe([this, command, idx](wheels::Result<Command>&& res) {
@@ -155,26 +148,17 @@ class MultiPaxos : public IReplica, public node::cluster::Peer {
         });
   }
 
-  void MakeCommit(Commit commit) {
-    LOG_INFO("Committing");
-    log_.Update(commit.idx, {std::move(commit.command)});
-    committed_commands_.emplace(commit.idx);
-  }
-
   void SendCommitted() {
     LOG_INFO("Sending committed commands");
     std::vector<Command> commands;
-    for (size_t i = *committed_commands_.begin();
-         committed_commands_.contains(i); ++i) {
-      commands.push_back(log_.Read(i)->command);
-      committed_commands_.erase(i);
-      last_sent_ = i;
+    while (committed_commands_.contains(last_sent_ + 1)) {
+      commands.push_back(committed_commands_[++last_sent_]);
     }
     to_apply_.TrySend(std::move(commands));
   }
 
   void ApplyCommand(Command command) {
-    if (NoOp(command)) {
+    if (IsNoOp(command)) {
       return;
     }
 
@@ -184,7 +168,6 @@ class MultiPaxos : public IReplica, public node::cluster::Peer {
     last_applied_[command.request_id.client_id] = command.request_id.index;
   }
 
-  // TODO: client_id
   void Respond(const RequestId& request_id, muesli::Bytes response) {
     LOG_INFO("Respond to {}", request_id);
     std::move(promises_.at(request_id)).SetValue(Ack{std::move(response)});
@@ -217,11 +200,13 @@ class MultiPaxos : public IReplica, public node::cluster::Peer {
                command.request_id.index;
   }
 
-  [[nodiscard]] bool NoOp(const Command& command) const {
+  [[nodiscard]] bool IsNoOp(const Command& command) const {
     return command.type.empty();
   }
 
  private:
+  whirl::node::cluster::Peer peer_;
+
   // Replicated state
   IStateMachinePtr state_machine_;
 
@@ -231,15 +216,18 @@ class MultiPaxos : public IReplica, public node::cluster::Peer {
   Log log_;
 
   await::fibers::Channel<Command> commands_;
-  await::fibers::Channel<Commit> commits_;
+  await::fibers::Channel<paxos::Commit> commits_;
   await::fibers::Channel<std::vector<Command>> to_apply_;
+
+  await::fibers::Mutex log_lock_;
 
   std::map<RequestId, await::futures::Promise<Response>> promises_;
   std::map<std::string, size_t> last_applied_;
   std::map<std::string, muesli::Bytes> last_response_;
-  std::set<size_t> committed_commands_;
+  std::map<size_t, Command> committed_commands_;
 
   size_t last_sent_{0};
+  size_t last_idx_{0};
 
   // Logging
   timber::Logger logger_;

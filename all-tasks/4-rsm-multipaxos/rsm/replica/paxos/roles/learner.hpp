@@ -1,6 +1,6 @@
 #pragma once
 
-#include <await/fibers/sync/mutex.hpp>
+#include <await/fibers/sync/channel.hpp>
 
 #include <commute/rpc/service_base.hpp>
 
@@ -11,6 +11,11 @@
 #include <whirl/node/store/kv.hpp>
 
 namespace paxos {
+
+struct Commit {
+  size_t idx;
+  rsm::Command command;
+};
 
 class Learner : public commute::rpc::ServiceBase<Learner> {
  public:

@@ -28,6 +28,8 @@ class Log {
 
   void TruncatePrefix(size_t index);
 
+  [[nodiscard]] size_t LastIndex() const;
+
  private:
   using ILogImpl = persist::rsm::multipaxos::IRandomAccessLog;
 
